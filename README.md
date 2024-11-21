@@ -38,8 +38,8 @@ The handlers in this repository enable easy:
 ## Installation
 
 ```bash
-git clone https://github.com/insilicomedicine/p3gpt-handlers.git
-cd p3gpt-handlers
+git clone https://github.com/insilicomedicine/precious3-gpt.git
+cd precious3-gpt
 
 # Create conda environment
 conda env create -f environment.yml
