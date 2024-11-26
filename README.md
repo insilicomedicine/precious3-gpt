@@ -35,6 +35,12 @@ The handlers in this repository enable easy:
 2. Chemical screening simulation: Predict compound effects across tissues
 3. Multi-omics analysis: Get transcriptomic, epigenomic, or proteomic signatures for your experiment
 
+## Requirements
+
+- Python 3.11
+- CUDA 12.4 with compatible NVIDIA drivers
+- 16GB+ GPU memory recommended
+
 ## Installation
 
 ```bash
@@ -79,7 +85,7 @@ screen(top_k=250)
 screen.result_to_df.to_csv("./screening_output.txt", sep='\t', index = False)
 ```
 
-For a complete example analyzing aging signatures across multiple tissues and species, see [Hallmark Definition Demo.ipynb](examples/hallmark_definition_demo.ipynb).
+For a complete example analyzing aging signatures across multiple tissues and species, see [Hallmark Definition Demo.ipynb](Notebooks/hallmark_definition_demo.ipynb).
 
 ## Modes of Operation
 
