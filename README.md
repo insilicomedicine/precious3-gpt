@@ -85,7 +85,7 @@ screen(top_k=250)
 screen.result_to_df.to_csv("./screening_output.txt", sep='\t', index = False)
 ```
 
-For a complete example analyzing aging signatures across multiple tissues and species, see [Hallmark Definition Demo.ipynb](Notebooks/hallmark_definition_demo.ipynb).
+For a complete example analyzing aging signatures across multiple tissues and species, see [this notebook](./Notebooks/Hallmark%20Definition%20Demo.ipynb).
 
 ## Modes of Operation
 
