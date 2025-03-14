@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p3gpt"
+version = "0.1.0"
+description = "Precious3 GPT - A multimodal language model for biomedical applications"
+readme = "README.md"
+authors = [
+    {name = "InSilicoMedicine", email = "f.galkin@insilico.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "datasets==3.1",
+    "einops==0.8",
+    "huggingface-hub==0.26",
+    "numpy==2.1",
+    "tokenizers==0.20",
+    "torch==2.5",
+    "transformers==4.46",
+    "pandas",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/insilicomedicine/precious3-gpt"
+"Bug Tracker" = "https://github.com/insilicomedicine/precious3-gpt/issues"

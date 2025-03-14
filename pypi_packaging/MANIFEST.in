@@ -1,0 +1,12 @@
+include LICENSE
+include README.md
+include requirements.txt
+include pyproject.toml
+include environment.yml
+
+recursive-include p3gpt *.py
+recursive-include p3gpt *.json
+recursive-include p3gpt *.txt
+recursive-include p3gpt *.csv
+recursive-include p3gpt *.yaml
+recursive-include p3gpt *.yml

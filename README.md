@@ -1,9 +1,9 @@
 # Precious3GPT
 
 <p align="center">
-  📃 <a href="https://doi.org/10.1101/2024.07.25.605062" target="_blank">Pre-print</a> • 👾 <a href="https://discord.gg/P4PWFNbYFg" target="_blank">Discord bot</a> • 🤗 <a href="https://doi.org/10.57967/hf/2699" target="_blank">Hugging Face</a>
+  <a href="https://doi.org/10.1101/2024.07.25.605062" target="_blank">📃 Pre-print</a> • <a href="https://discord.gg/P4PWFNbYFg" target="_blank">👾 Discord community</a> • <a href="https://doi.org/10.57967/hf/2699" target="_blank">🤗 Hugging Face</a>
   <br>
-  𝕏 <a href="https://x.com/precious_gpt" target="_blank">@precious_gpt</a>
+  <a href="https://x.com/precious_gpt" target="_blank">𝕏 @precious_gpt</a>
 </p>
 
 <div align="center">
@@ -14,6 +14,7 @@ Python wrappers and utility classes for interacting with Precious3GPT (P3GPT), a
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/p3gpt)](https://pypi.org/project/p3gpt/)
 
 ## Overview
 
@@ -28,7 +29,7 @@ The model can simulate experiments using:
 - 635 health conditions
 - 22k small molecules
 
-⚠️ **Important**: Check [supported entities](https://huggingface.co/insilicomedicine/precious3-gpt-multi-modal/blob/main/p3_entities_with_type.csv) before use. Only listed drugs, conditions, and age groups are supported.
+ **Important**: Check [supported entities](https://huggingface.co/insilicomedicine/precious3-gpt-multi-modal/blob/main/p3_entities_with_type.csv) before use. Only listed drugs, conditions, and age groups are supported.
 
 The handlers in this repository enable easy:
 1. Digital case-control studies: Generate differential expression between conditions (young vs old, healthy vs diseased)
@@ -43,6 +44,20 @@ The handlers in this repository enable easy:
 
 ## Installation
 
+### Option 1: Install from PyPI
+
+The simplest way to install P3GPT is directly from PyPI:
+
+```bash
+pip install p3gpt
+```
+
+This will install the latest stable version of the package and all its dependencies.
+
+### Option 2: Install from source
+
+For the latest development version or to contribute to the project:
+
 ```bash
 git clone https://github.com/insilicomedicine/precious3-gpt.git
 cd precious3-gpt
@@ -53,6 +68,24 @@ conda activate p3gpt
 
 # Install the package in development mode
 pip install -e .
+```
+
+## Package Structure
+
+The P3GPT package is organized as follows:
+
+```
+p3gpt/
+├── __init__.py
+├── handlers/
+│   ├── __init__.py
+│   ├── p3_multimodal.py         # Model definitions
+│   └── p3_multimodal_handler.py # Handler implementations
+├── mpt_7b/                      # MPT-7B model implementation
+│   └── ...
+└── p3screen/                    # Screening utilities
+    ├── __init__.py
+    └── screening.py
 ```
 
 ## Quick Start
