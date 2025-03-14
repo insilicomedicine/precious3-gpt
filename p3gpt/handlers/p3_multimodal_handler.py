@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
-from handlers.p3_multimodal import Precious3MPTForCausalLM
+from p3gpt.handlers.p3_multimodal import Precious3MPTForCausalLM
 
 
 @dataclass
@@ -689,4 +689,3 @@ class HandlerFactory:
         if not handler_class:
             raise ValueError(f"Unknown handler type: {handler_type}")
         return handler_class(path, device)
-

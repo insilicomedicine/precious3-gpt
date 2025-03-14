@@ -15,12 +15,12 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
 )
 
-from mpt_7b.modeling_mpt import MPTModel, MPTForCausalLM, gen_attention_mask_in_length
-from mpt_7b.configuration_mpt import MPTConfig
-from mpt_7b.blocks import MPTBlock
-from mpt_7b.norm import NORM_CLASS_REGISTRY
-from mpt_7b.custom_embedding import SharedEmbedding
-from mpt_7b.attention import ATTN_CLASS_REGISTRY, attn_bias_shape, build_attn_bias, gen_slopes
+from p3gpt.mpt_7b.modeling_mpt import MPTModel, MPTForCausalLM, gen_attention_mask_in_length
+from p3gpt.mpt_7b.configuration_mpt import MPTConfig
+from p3gpt.mpt_7b.blocks import MPTBlock
+from p3gpt.mpt_7b.norm import NORM_CLASS_REGISTRY
+from p3gpt.mpt_7b.custom_embedding import SharedEmbedding
+from p3gpt.mpt_7b.attention import ATTN_CLASS_REGISTRY, attn_bias_shape, build_attn_bias, gen_slopes
 from transformers.models.mpt.modeling_mpt import build_mpt_alibi_tensor
 
 log = logging.getLogger(__name__)

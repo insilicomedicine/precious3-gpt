@@ -50,13 +50,16 @@ cd precious3-gpt
 # Create conda environment
 conda env create -f environment.yml
 conda activate p3gpt
+
+# Install the package in development mode
+pip install -e .
 ```
 
 ## Quick Start
 
 ```python
-from handlers.p3_multimodal_handler import HandlerFactory
-from handlers.screening import TopTokenScreening
+from p3gpt.handlers import HandlerFactory
+from p3gpt.p3screen import TopTokenScreening
 
 # Initialize handler 
 handler = HandlerFactory.create_handler('endpoint', device='cuda:0')
