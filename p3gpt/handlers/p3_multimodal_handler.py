@@ -12,7 +12,13 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from p3gpt.handlers.p3_multimodal import Precious3MPTForCausalLM
-
+from p3gpt.utils.env_config import (
+    get_model_path, 
+    ENTITIES_CSV_URL, 
+    GPT_GENES_EMBEDDINGS_URL, 
+    HGT_GENES_EMBEDDINGS_URL,
+    SMILES_EMBEDDINGS_PATH
+)
 
 @dataclass
 class GenerationConfig:
@@ -35,14 +41,12 @@ class GenerationConfig:
             "max_new_tokens": self.max_new_tokens
         }
 
-
 class BaseHandler(ABC):
     """Abstract base class for P3GPT handlers implementing common functionality"""
-    DEFAULT_PATH = "insilicomedicine/precious3-gpt-multi-modal"
-
+    
     def __init__(self, path: str = "", device: str = 'cuda:0'):
         self.device = device
-        self.path = path or self.DEFAULT_PATH
+        self.path = path  
         self.generation_config = GenerationConfig()
         self._mode = "meta2diff"
 
@@ -62,7 +66,7 @@ class BaseHandler(ABC):
 
     def _load_tokenizer(self) -> PreTrainedTokenizerFast:
         """Load the tokenizer"""
-        return AutoTokenizer.from_pretrained(self.DEFAULT_PATH, trust_remote_code=True)
+        return AutoTokenizer.from_pretrained(self.path, trust_remote_code=True)
 
     @abstractmethod
     def create_prompt(self, prompt_config: Dict[str, Any]) -> str:
@@ -169,8 +173,7 @@ class BaseHandler(ABC):
 
     def _load_unique_entities(self) -> Tuple[List[str], List[str]]:
         """Load unique entities from online CSV"""
-        unique_entities_p3 = pd.read_csv(
-            'https://huggingface.co/insilicomedicine/precious3-gpt/raw/main/all_entities_with_type.csv')
+        unique_entities_p3 = pd.read_csv(ENTITIES_CSV_URL)
         unique_compounds = [i.strip() for i in
                             unique_entities_p3[unique_entities_p3.type == 'compound'].entity.to_list()]
         unique_genes = [i.strip() for i in
@@ -179,10 +182,8 @@ class BaseHandler(ABC):
 
     def _load_embeddings(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Load gene embeddings"""
-        emb_gpt_genes = pd.read_pickle(
-            'https://huggingface.co/insilicomedicine/precious3-gpt-multi-modal/resolve/main/multi-modal-data/emb_gpt_genes.pickle')
-        emb_hgt_genes = pd.read_pickle(
-            'https://huggingface.co/insilicomedicine/precious3-gpt-multi-modal/resolve/main/multi-modal-data/emb_hgt_genes.pickle')
+        emb_gpt_genes = pd.read_pickle(GPT_GENES_EMBEDDINGS_URL)
+        emb_hgt_genes = pd.read_pickle(HGT_GENES_EMBEDDINGS_URL)
         return (dict(zip(emb_gpt_genes.gene_symbol.tolist(), emb_gpt_genes.embs.tolist())),
                 dict(zip(emb_hgt_genes.gene_symbol.tolist(), emb_hgt_genes.embs.tolist())))
 
@@ -267,11 +268,14 @@ class BaseHandler(ABC):
                 sorted(set(generated_sample) & set(self.unique_genes_p3), key=generated_sample.index))
         return predicted_genes
 
-
 class EndpointHandler(BaseHandler):
-    """Standard endpoint handler implementation"""
+    """Handler for P3GPT endpoint processing."""
+    
+    def __init__(self, path: str = "", device: str = 'cuda:0'):
+        super().__init__(path or get_model_path('base'), device)
 
     def _load_model(self):
+        """Load P3GPT model."""
         return Precious3MPTForCausalLM.from_pretrained(
             self.path,
             torch_dtype=torch.bfloat16,
@@ -433,29 +437,26 @@ class EndpointHandler(BaseHandler):
         inf_tensor = torch.tensor(float("-inf")).type(torch.bfloat16).to(logits.device)
         return logits.where(sorted_indices_to_remove, inf_tensor)
 
-
 class SMILESHandler(BaseHandler):
     """Handler for SMILES-specific P3GPT processing with enhanced modality support."""
-    DEFAULT_PATH = "insilicomedicine/p3gpt-smiles"
-    
+
     def __init__(self, path: str = "", device: str = 'cuda:0'):
+        # Use SMILES model path by default if no path is provided
+        path = path or get_model_path('smiles')
         super().__init__(path, device)
         self.emb_smiles_nach0 = self._load_smiles_embeddings()
 
     def _load_model(self):
         """Load P3GPT model with SMILES support."""
         return Precious3MPTForCausalLM.from_pretrained(
-            self.path or self.DEFAULT_PATH,
-            torch_dtype=torch.bfloat16,
-            modality4_dim=None  # Updated to support SMILES modality
+            self.path,
+            torch_dtype=torch.bfloat16
         ).to(self.device)
 
     def _load_smiles_embeddings(self) -> Optional[Dict[str, Any]]:
         """Load SMILES embeddings from storage."""
         try:
-            return pd.read_pickle(
-                'https://huggingface.co/insilicomedicine/precious3-gpt-multi-modal/resolve/main/multi-modal-data/smiles_embeddings_dict.pickle'
-            )
+            return pd.read_pickle(SMILES_EMBEDDINGS_PATH)
         except Exception as e:
             print(f"Failed to load SMILES embeddings: {e}")
             return None
@@ -479,7 +480,7 @@ class SMILESHandler(BaseHandler):
                         
                     if k == 'up' and ('drug' in prompt_config or prompt_config.get('smiles_embedding')):
                         prefix = multi_modal_prefix
-                    elif k == 'down' and 'drug' in prompt_config:
+                    elif k == 'down' and ('drug' in prompt_config or prompt_config.get('smiles_embedding')):
                         prefix = multi_modal_prefix
                     else:
                         continue
@@ -632,8 +633,9 @@ class SMILESHandler(BaseHandler):
             # Pre-processing
             prompt = self.create_prompt(prompt_config)
             if self._mode != "diff2compound":
-                prompt += "<up>"
-
+                if '<up>' not in prompt:
+                    prompt += "<up>"
+            
             # Prepare inputs
             inputs = self._prepare_inputs(prompt)
 
@@ -645,8 +647,16 @@ class SMILESHandler(BaseHandler):
             smiles_emb = None
             if 'smiles_embedding' in prompt_config:
                 smiles_emb = prompt_config['smiles_embedding']
-            elif 'drug' in prompt_config and self.emb_smiles_nach0:
-                smiles_emb = self.emb_smiles_nach0.get(prompt_config['drug'])
+            elif 'drug' in prompt_config:
+                drug_value = prompt_config.get('drug', '')
+                if drug_value and isinstance(drug_value, str) and drug_value.strip():
+                    if drug_value in self.emb_smiles_nach0:
+                        smiles_emb = self.emb_smiles_nach0.get(drug_value)
+                    else:
+                        # Skip with a warning instead of raising an error
+                        print(f"Warning: Drug '{drug_value}' not found in loaded embeddings. Continuing without SMILES embedding.")
+                else:
+                    print("Drug field is empty or None, continuing without SMILES embedding")
 
             embeddings = {
                 "acc_embs_up_kg_mean": acc_embs_up_kg,
@@ -677,13 +687,151 @@ class SMILESHandler(BaseHandler):
         except Exception as e:
             return self._handle_generation_error(e, prompt_config)
 
+class DynamicSMILESHandler(SMILESHandler):
+    """Handler for SMILES-specific P3GPT processing with dynamic SMILES embedding generation.
+    
+    This handler can generate SMILES embeddings on-the-fly using the nach0 model,
+    and can also look up SMILES structures from PubChem by compound name.
+    """
+    
+    def __init__(self, path: str = "", device: str = 'cuda:0'):
+        super().__init__(path, device)
+        self.nach0_model = None
+        self.nach0_tokenizer = None
+        self.nach0_embeddings = None
+        self.compound_mapper = None
+    
+    def _load_smiles_embeddings(self) -> Dict[str, Any]:
+        """Override parent method to return an empty dictionary instead of loading from file.
+        
+        The DynamicSMILESHandler generates embeddings on-the-fly and doesn't need pre-computed embeddings.
+        """
+        print("DynamicSMILESHandler: Using on-the-fly SMILES embedding generation")
+        return {}
+        
+    def _load_nach0_model(self):
+        """Load the nach0 model for SMILES embedding generation."""
+        if self.nach0_model is None:
+            try:
+                from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+                print("Loading nach0 model for SMILES embedding generation...")
+                nach0_path = get_model_path('nach0')
+                self.nach0_tokenizer = AutoTokenizer.from_pretrained(nach0_path)
+                self.nach0_model = AutoModelForSeq2SeqLM.from_pretrained(nach0_path)
+                self.nach0_embeddings = self.nach0_model.encoder.embed_tokens.weight.detach().numpy()
+                print("nach0 model loaded successfully.")
+            except Exception as e:
+                print(f"Failed to load nach0 model: {e}")
+                raise
+    
+    def get_smiles_embedding(self, smiles: str) -> np.ndarray:
+        """Generate embedding for a SMILES string using the nach0 model."""
+        if self.nach0_model is None:
+            self._load_nach0_model()
+            
+        smiles = smiles.replace('"', '')
+        compound_smiles_toks = self.nach0_tokenizer.encode(smiles)[1:]  # Skip the first token
+        compound_smiles_emb = np.mean(self.nach0_embeddings[compound_smiles_toks], axis=0)
+        return compound_smiles_emb
+    
+    def _load_compound_mapper(self):
+        """Load the compound mapper for PubChem lookups."""
+        if self.compound_mapper is None:
+            try:
+                from p3gpt.pubchem import RequestsCompoundMapper
+                print("Initializing PubChem compound mapper...")
+                self.compound_mapper = RequestsCompoundMapper(
+                    request_timeout=30.0,
+                    max_retries=3
+                )
+                print("PubChem compound mapper initialized successfully.")
+            except Exception as e:
+                print(f"Failed to initialize PubChem compound mapper: {e}")
+                raise
+    
+    def lookup_smiles_from_pubchem(self, drug_name: str) -> str:
+        """Look up SMILES structure for a drug name from PubChem using the pubchem module.
+        
+        Args:
+            drug_name: Name of the drug to look up
+            
+        Returns:
+            SMILES string for the drug
+            
+        Raises:
+            ValueError: If the drug cannot be found or if multiple matches are found
+        """
+        try:
+            # Initialize compound mapper if needed
+            if self.compound_mapper is None:
+                self._load_compound_mapper()
+            
+            print(f"Looking up SMILES for {drug_name} from PubChem...")
+            
+            # Use the compound mapper to get SMILES
+            smiles = self.compound_mapper.get_smiles(drug_name)
+            
+            if not smiles:
+                raise ValueError(f"No SMILES found for compound {drug_name} in PubChem")
+                
+            print(f"Retrieved SMILES for {drug_name}: {smiles}")
+            return smiles
+            
+        except Exception as e:
+            print(f"Error looking up SMILES from PubChem: {e}")
+            raise ValueError(f"Could not retrieve SMILES for {drug_name} from PubChem") from e
+    
+    def __call__(self, prompt_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Override call method to handle dynamic SMILES embedding generation."""
+        try:
+            # Handle SMILES or drug name in prompt_config
+            if 'smiles' in prompt_config and prompt_config['smiles']:
+                # Generate embedding from provided SMILES
+                print(f"Generating embedding for provided SMILES: {prompt_config['smiles']}")
+                smiles_emb = self.get_smiles_embedding(prompt_config['smiles'])
+                # Add the embedding to prompt_config for parent class to use
+                prompt_config['smiles_embedding'] = smiles_emb
+                
+            elif 'drug' in prompt_config:
+                # Only attempt to look up SMILES if drug is provided and not empty
+                drug_value = prompt_config.get('drug', '')
+                if drug_value and isinstance(drug_value, str) and drug_value.strip():
+                    if drug_value not in self.emb_smiles_nach0:
+                        # Try to look up SMILES from PubChem
+                        try:
+                            smiles = self.lookup_smiles_from_pubchem(drug_value)
+                            smiles_emb = self.get_smiles_embedding(smiles)
+                            # Add the embedding to prompt_config for parent class to use
+                            prompt_config['smiles_embedding'] = smiles_emb
+                            # Cache the embedding for future use
+                            if self.emb_smiles_nach0 is None:
+                                self.emb_smiles_nach0 = {}
+                            self.emb_smiles_nach0[drug_value] = smiles_emb
+                            print(f"Added embedding for {drug_value} to cache")
+                        except Exception as e:
+                            # Log the error but continue without raising
+                            print(f"Failed to get SMILES for {drug_value} from PubChem: {e}")
+                            print(f"Continuing without SMILES embedding for drug: {drug_value}")
+                    else:
+                        # Drug is in the cache, will be handled by parent class
+                        pass
+                else:
+                    print("Drug field is empty or None, continuing without SMILES embedding")
+            
+            # Call parent class implementation
+            return super().__call__(prompt_config)
+            
+        except Exception as e:
+            return self._handle_generation_error(e, prompt_config)
+
 # Factory for creating appropriate handlers
 class HandlerFactory:
     @staticmethod
     def create_handler(handler_type: str, path: str = "", device: str = 'cuda:0') -> BaseHandler:
         handlers = {
             'endpoint': EndpointHandler,
-            'smiles': SMILESHandler
+            'smiles': SMILESHandler,
+            'dynamic_smiles': DynamicSMILESHandler
         }
         handler_class = handlers.get(handler_type.lower())
         if not handler_class:

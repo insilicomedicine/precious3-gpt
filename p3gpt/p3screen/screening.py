@@ -88,7 +88,6 @@ class TopTokenScreening:
             prompt['instruction'] = instructions
             return prompt
         except ValueError as e:
-            print(f"Invalid parameters {params}: {str(e)}")
             return None
 
     def __post_init__(self):
@@ -114,20 +113,98 @@ class TopTokenScreening:
             self.handler.generation_config.top_k = top_k
             self.handler.generation_config.n_next_tokens = top_k
 
+        # Calculate total number of prompts for progress tracking
+        total_prompts = 0
+        valid_prompts = []
         for grid in self.parameter_options:
             for values in product(*grid.values()):
                 params = dict(zip(grid.keys(), values))
-                if prompt_dict:= self._complete_prompt(params):
-                    key = self.hash_input(**prompt_dict)
-                    if key in self.result and not force:
-                        continue
+                # Silently check if any instruction would be valid for these parameters
+                try:
+                    self._validate_case_control(params)
+                    has_valid_instruction = any(
+                        condition(params) for _, condition in self.VALID_INSTRUCTIONS.items()
+                    )
+                    if has_valid_instruction and (prompt_dict := self._complete_prompt(params)):
+                        valid_prompts.append((grid, params, prompt_dict))
+                        total_prompts += 1
+                except ValueError:
+                    # Silently skip invalid prompts
+                    pass
 
-                    predictions = self.handler(prompt_dict)['output']
-                    if only_up:
-                        predictions['down'] = []
-                    if only_down:
-                        predictions['up'] = []
-                    self.result[key] = predictions
+        if total_prompts == 0:
+            print("No valid prompts to process")
+            return
+
+        # Start time tracking
+        start_time = time.time()
+        processed = 0
+
+        print(f"Starting screening of {total_prompts} prompts...")
+        
+        for grid, params, prompt_dict in valid_prompts:
+            key = self.hash_input(**prompt_dict)
+            if key in self.result and not force:
+                processed += 1
+                print(f"[{processed}/{total_prompts}] ({processed/total_prompts*100:.1f}%) Skipped (already processed): {self._format_prompt_summary(prompt_dict)}")
+                continue
+            
+            # Display compact prompt summary
+            print(f"[{processed+1}/{total_prompts}] ({(processed+1)/total_prompts*100:.1f}%) Processing: {self._format_prompt_summary(prompt_dict)}", end="", flush=True)
+            
+            # Process prompt
+            prompt_start_time = time.time()
+            predictions = self.handler(prompt_dict)['output']
+            prompt_elapsed = time.time() - prompt_start_time
+            
+            # Apply filters
+            if only_up:
+                predictions['down'] = []
+            if only_down:
+                predictions['up'] = []
+                
+            # Store results
+            self.result[key] = predictions
+            
+            # Update progress
+            processed += 1
+            
+            # Print completion status with time
+            print(f" - Done in {prompt_elapsed:.2f}s - Found {len(predictions.get('up', []))} up / {len(predictions.get('down', []))} down genes")
+        
+        # Report total time
+        total_elapsed = time.time() - start_time
+        print(f"\nScreening completed in {total_elapsed:.2f}s ({total_elapsed/60:.2f}m)")
+        print(f"Processed {processed} prompts, generated {len(self.result)} unique results")
+
+    def _format_prompt_summary(self, prompt_dict: Dict[str, Any]) -> str:
+        """Create a compact summary of a prompt for display."""
+        # Extract the most relevant fields for display
+        summary_parts = []
+        
+        # Add species if present
+        if species := prompt_dict.get('species'):
+            summary_parts.append(f"{species}")
+            
+        # Add tissue if present
+        if tissue := prompt_dict.get('tissue'):
+            summary_parts.append(f"{tissue}")
+            
+        # Add case-control if present
+        if case := prompt_dict.get('case'):
+            if control := prompt_dict.get('control'):
+                summary_parts.append(f"{control}→{case}")
+                
+        # Add drug if present
+        if drug := prompt_dict.get('drug'):
+            summary_parts.append(f"drug:{drug}")
+            
+        # Add disease if present
+        if efo := prompt_dict.get('efo'):
+            summary_parts.append(f"disease:{efo}")
+            
+        return " | ".join(summary_parts) + "\n"
+
 
     def prep_res_json(self) -> Dict[str, Dict[str, Any]]:
         """Prepare results for JSON export with grid info."""
@@ -139,14 +216,25 @@ class TopTokenScreening:
         for grid_idx, grid in enumerate(self.parameter_options):
             for values in product(*grid.values()):
                 params = dict(zip(grid.keys(), values))
-                if prompt := self._complete_prompt(params):
-                    key = self.hash_input(**prompt)
-                    if predictions := self.result.get(key):
-                        formatted["results"][key] = {
-                            "grid_index": grid_idx,
-                            "parameters": prompt,
-                            "predictions": {k: v for k, v in predictions.items() if v}
-                        }
+                try:
+                    # Check if any instruction would be valid for these parameters
+                    self._validate_case_control(params)
+                    has_valid_instruction = any(
+                        condition(params) for _, condition in self.VALID_INSTRUCTIONS.items()
+                    )
+                    
+                    if has_valid_instruction and (prompt_dict := self._complete_prompt(params)):
+                        key = self.hash_input(**prompt_dict)
+                        if predictions := self.result.get(key):
+                            formatted["results"][key] = {
+                                "grid_index": grid_idx,
+                                "parameters": prompt_dict,
+                                "predictions": {k: v for k, v in predictions.items() if v}
+                            }
+                except ValueError:
+                    # Silently skip invalid prompts
+                    pass
+                    
         return formatted
 
     def export_result(self, filepath: str) -> None:
@@ -159,9 +247,14 @@ class TopTokenScreening:
     def result_to_df(self):
         """Convert results to DataFrame."""
         json_res = self.prep_res_json()['results']
+        
+        # If no results, return empty DataFrame
+        if not json_res:
+            return pd.DataFrame()
+            
         gen_cols = set.union(*[set(x['predictions'].keys()) for x in json_res.values()])
         df = pd.DataFrame(None,
-                          index=self.result.keys(),
+                          index=list(json_res.keys()),  # Use only keys from json_res
                           columns=list(self.TEMPLATE_PROMPT.keys()))
 
         for hashkey, res_item in json_res.items():
@@ -170,11 +263,13 @@ class TopTokenScreening:
         for col in gen_cols:
             df["gen_" + col] = None
             for i in df.index:
-                this_out = json_res[i]["predictions"].get(col)
-                if this_out:
-                    df.loc[i, "gen_" + col] = ";".join(this_out)
+                # Check if i exists in json_res before accessing
+                if i in json_res and "predictions" in json_res[i]:
+                    this_out = json_res[i]["predictions"].get(col)
+                    if this_out:
+                        df.loc[i, "gen_" + col] = ";".join(this_out)
 
-        return(df)
+        return df
 
 
     @classmethod
@@ -213,7 +308,7 @@ class TopTokenScreening:
 class TokenAnalysis:
     screen_results: TopTokenScreening
     sibling_groups: Dict[str, List[str]] = field(default_factory=dict)
-    overlapping_genes: Dict[str, Dict[str, Set[str]]] = field(default_factory=dict)
+    overlapping_genes: Dict[str, Dict[str, Dict[Tuple[str, str], Set[str]]]] = field(default_factory=dict)
 
     enrichment_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     batch_size: int = 3  # Process in batches of 3
