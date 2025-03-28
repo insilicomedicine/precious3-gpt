@@ -110,6 +110,34 @@ class BaseHandler(ABC):
             if self._mode != "diff2compound":
                 prompt += "<up>"
 
+            # Check for UNK tokens in the prompt
+            has_unk, tokenized_prompt = self._check_for_unk_tokens(prompt)
+            if has_unk:
+                # Handle the case where UNK tokens are present
+                error_message = f"Your input contains unrecognized input tokens: {tokenized_prompt}"
+                print(error_message)
+                
+                # Create a response with error message and special first entry
+                if self._mode in ["meta2diff", "meta2diff2compound"]:
+                    return {
+                        "output": {
+                            "up": ["Input_contains_UNK_tokens"],
+                            "down": ["Input_contains_UNK_tokens"]
+                        },
+                        "mode": self._mode,
+                        "message": error_message,
+                        "input": prompt,
+                        "random_seed": None
+                    }
+                else:
+                    return {
+                        "output": ["Input_contains_UNK_tokens"],
+                        "mode": self._mode,
+                        "message": error_message,
+                        "input": prompt,
+                        "random_seed": None
+                    }
+
             # Prepare inputs
             inputs = self._prepare_inputs(prompt)
 
@@ -250,9 +278,32 @@ class BaseHandler(ABC):
         processed_outputs = {"up": [], "down": []}
 
         if mode in ['meta2diff', 'meta2diff2compound']:
-            processed_outputs['up'] = self._get_unique_genes(next_token_up_genes)[0] if next_token_up_genes else []
-            processed_outputs['down'] = self._get_unique_genes(next_token_down_genes)[
-                0] if next_token_down_genes else []
+            # Get unique genes for up and down regulation
+            up_genes = self._get_unique_genes(next_token_up_genes)[0] if next_token_up_genes else []
+            down_genes = self._get_unique_genes(next_token_down_genes)[0] if next_token_down_genes else []
+            
+            # Find genes that appear in both lists
+            up_set = set(up_genes)
+            down_set = set(down_genes)
+            duplicate_genes = up_set.intersection(down_set)
+            
+            if duplicate_genes:
+                # Create position maps for faster lookup
+                up_positions = {gene: idx for idx, gene in enumerate(up_genes)}
+                down_positions = {gene: idx for idx, gene in enumerate(down_genes)}
+                
+                # Determine which list to remove each duplicate from
+                # Keep gene in the list where it appears earlier (higher rank)
+                drop_from_up = [gene for gene in duplicate_genes if up_positions[gene] >= down_positions[gene]]
+                drop_from_down = [gene for gene in duplicate_genes if up_positions[gene] < down_positions[gene]]
+                
+                # Filter out duplicates
+                processed_outputs['up'] = [gene for gene in up_genes if gene not in drop_from_up]
+                processed_outputs['down'] = [gene for gene in down_genes if gene not in drop_from_down]
+            else:
+                # No duplicates found
+                processed_outputs['up'] = up_genes
+                processed_outputs['down'] = down_genes
         else:
             processed_outputs = {"generated_sequences": []}
 
@@ -267,6 +318,29 @@ class BaseHandler(ABC):
             predicted_genes.append(
                 sorted(set(generated_sample) & set(self.unique_genes_p3), key=generated_sample.index))
         return predicted_genes
+
+    def _check_for_unk_tokens(self, prompt: str) -> Tuple[bool, str]:
+        """
+        Check if the prompt contains any UNK tokens when tokenized.
+        
+        Args:
+            prompt: The prompt string to check
+            
+        Returns:
+            Tuple containing:
+            - Boolean indicating if UNK tokens were found
+            - String with the tokenized prompt showing UNK tokens if any
+        """
+        # Tokenize the prompt
+        tokens = self.tokenizer.tokenize(prompt)
+        
+        # Check for UNK tokens
+        has_unk = any(token == self.tokenizer.unk_token for token in tokens)
+        
+        # Create a string representation of the tokenized prompt
+        tokenized_prompt = " ".join(tokens)
+        
+        return has_unk, tokenized_prompt
 
 class EndpointHandler(BaseHandler):
     """Handler for P3GPT endpoint processing."""
@@ -351,7 +425,6 @@ class EndpointHandler(BaseHandler):
         next_token_up_genes = []
         next_token_down_genes = []
 
-        # Single generation sequence
         start_time = time.time()
         current_token = input_ids.clone()
         next_token = current_token[0][-1]
@@ -420,8 +493,8 @@ class EndpointHandler(BaseHandler):
         print(f"Generation time: {(time.time() - start_time):.2f} seconds")
 
         processed_outputs = self.process_generated_outputs(next_token_up_genes, next_token_down_genes, mode)
-        predicted_compounds = [[i.strip() for i in self.tokenizer.convert_ids_to_tokens(j)]
-                               for j in next_token_compounds]
+        predicted_compounds = [[i.strip() for i in self.tokenizer.convert_ids_to_tokens(j)] 
+                             for j in next_token_compounds]
 
         return processed_outputs, predicted_compounds, random_seed
 
@@ -485,7 +558,7 @@ class SMILESHandler(BaseHandler):
                     else:
                         continue
                         
-                    prompt += f'{prefix}<{k}>{" ".join(v) if isinstance(v, list) else v}</{k}>'
+                    prompt += f'{prefix}<{k}>{" ".join(v) if isinstance(v, list) else v} </{k}>'
                 
                 case 'age':
                     if isinstance(v, int):
@@ -497,7 +570,7 @@ class SMILESHandler(BaseHandler):
                 
                 case _:
                     if v:
-                        prompt += f'<{k}>{v.strip() if isinstance(v, str) else " ".join(v)}</{k}>'
+                        prompt += f'<{k}>{v.strip() if isinstance(v, str) else " ".join(v)} </{k}>'
                     else:
                         prompt += f'<{k}></{k}>'
 
@@ -636,6 +709,34 @@ class SMILESHandler(BaseHandler):
                 if '<up>' not in prompt:
                     prompt += "<up>"
             
+            # Check for UNK tokens in the prompt
+            has_unk, tokenized_prompt = self._check_for_unk_tokens(prompt)
+            if has_unk:
+                # Handle the case where UNK tokens are present
+                error_message = f"Your input contains unrecognized input tokens: {tokenized_prompt}"
+                print(error_message)
+                
+                # Create a response with error message and special first entry
+                if self._mode in ["meta2diff", "meta2diff2compound"]:
+                    return {
+                        "output": {
+                            "up": ["Input_contains_UNK_tokens"],
+                            "down": ["Input_contains_UNK_tokens"]
+                        },
+                        "mode": self._mode,
+                        "message": error_message,
+                        "input": prompt,
+                        "random_seed": None
+                    }
+                else:
+                    return {
+                        "output": ["Input_contains_UNK_tokens"],
+                        "mode": self._mode,
+                        "message": error_message,
+                        "input": prompt,
+                        "random_seed": None
+                    }
+
             # Prepare inputs
             inputs = self._prepare_inputs(prompt)
 
@@ -783,46 +884,130 @@ class DynamicSMILESHandler(SMILESHandler):
     
     def __call__(self, prompt_config: Dict[str, Any]) -> Dict[str, Any]:
         """Override call method to handle dynamic SMILES embedding generation."""
+
+        # Cache the embedding for future use
+        if self.emb_smiles_nach0 is None:
+            self.emb_smiles_nach0 = {}
+
         try:
-            # Handle SMILES or drug name in prompt_config
+            has_smiles = False
+            has_drug = False
+            smiles_emb = None
+
             if 'smiles' in prompt_config and prompt_config['smiles']:
-                # Generate embedding from provided SMILES
-                print(f"Generating embedding for provided SMILES: {prompt_config['smiles']}")
-                smiles_emb = self.get_smiles_embedding(prompt_config['smiles'])
-                # Add the embedding to prompt_config for parent class to use
-                prompt_config['smiles_embedding'] = smiles_emb
-                
-            elif 'drug' in prompt_config:
-                # Only attempt to look up SMILES if drug is provided and not empty
+                smiles_value = prompt_config.get('smiles', '')
+                if smiles_value and isinstance(smiles_value, str) and smiles_value.strip():
+                    has_smiles = True 
+
+            elif 'drug' in prompt_config and prompt_config['drug']:
                 drug_value = prompt_config.get('drug', '')
                 if drug_value and isinstance(drug_value, str) and drug_value.strip():
-                    if drug_value not in self.emb_smiles_nach0:
+                    has_drug = True
+            
+            
+            if has_drug or has_smiles:
+                # Only attempt to look up SMILES if drug is provided and not empty
+                if has_drug:
+
+                    if drug_value in self.emb_smiles_nach0:
+                        smiles_emb = self.emb_smiles_nach0[drug_value]
+                    else:
                         # Try to look up SMILES from PubChem
                         try:
-                            smiles = self.lookup_smiles_from_pubchem(drug_value)
-                            smiles_emb = self.get_smiles_embedding(smiles)
-                            # Add the embedding to prompt_config for parent class to use
-                            prompt_config['smiles_embedding'] = smiles_emb
-                            # Cache the embedding for future use
-                            if self.emb_smiles_nach0 is None:
-                                self.emb_smiles_nach0 = {}
-                            self.emb_smiles_nach0[drug_value] = smiles_emb
-                            print(f"Added embedding for {drug_value} to cache")
+                            smiles_value = self.lookup_smiles_from_pubchem(drug_value)
                         except Exception as e:
                             # Log the error but continue without raising
                             print(f"Failed to get SMILES for {drug_value} from PubChem: {e}")
                             print(f"Continuing without SMILES embedding for drug: {drug_value}")
-                    else:
-                        # Drug is in the cache, will be handled by parent class
-                        pass
-                else:
-                    print("Drug field is empty or None, continuing without SMILES embedding")
+
+                        smiles_emb = self.get_smiles_embedding(smiles_value)
+
+                        self.emb_smiles_nach0[drug_value] = smiles_emb
+                        print(f"Added embedding for {drug_value} to cache")
+            else:
+                print("Drug field is empty or None, continuing without SMILES embedding")
+
+            # NB: Is there a way to make this class just a subcase of the superclass?
+            # Pre-processing
             
-            # Call parent class implementation
-            return super().__call__(prompt_config)
+            prompt_config = {x:y for x,y in prompt_config.items() if not x in ('smiles', )}
+            prompt_config['drug'] = prompt_config['drug'].lower().strip() + " "
+            if self.tokenizer.encode(prompt_config['drug'])[0] == self.tokenizer.unk_token_id:
+                prompt_config['drug'] = ""
+            else:
+                smiles_emb = None
+
+            prompt = self.create_prompt(prompt_config)
+            if self._mode != "diff2compound":
+                if '<up>' not in prompt:
+                    prompt += "<up>"
+            
+            # Check for UNK tokens in the prompt
+            has_unk, tokenized_prompt = self._check_for_unk_tokens(prompt)
+            if has_unk:
+                # Handle the case where UNK tokens are present
+                error_message = f"Your input contains unrecognized input tokens: {tokenized_prompt}"
+                print(error_message)
+                
+                # Create a response with error message and special first entry
+                if self._mode in ["meta2diff", "meta2diff2compound"]:
+                    return {
+                        "output": {
+                            "up": ["Input_contains_UNK_tokens"],
+                            "down": ["Input_contains_UNK_tokens"]
+                        },
+                        "mode": self._mode,
+                        "message": error_message,
+                        "input": prompt,
+                        "random_seed": None
+                    }
+                else:
+                    return {
+                        "output": ["Input_contains_UNK_tokens"],
+                        "mode": self._mode,
+                        "message": error_message,
+                        "input": prompt,
+                        "random_seed": None
+                    }
+
+            # Prepare inputs
+            inputs = self._prepare_inputs(prompt)
+
+            # Get embeddings including SMILES
+            acc_embs_up_kg, acc_embs_up_txt, acc_embs_down_kg, acc_embs_down_txt = self._get_accumulated_embeddings(
+                prompt_config)
+            
+            embeddings = {
+                "acc_embs_up_kg_mean": acc_embs_up_kg,
+                "acc_embs_up_txt_mean": acc_embs_up_txt,
+                "acc_embs_down_kg_mean": acc_embs_down_kg,
+                "acc_embs_down_txt_mean": acc_embs_down_txt,
+                "smiles_emb": smiles_emb
+            }
+
+            # Get generation parameters
+            generation_params = self.generation_config.get_generation_params()
+            generation_params['max_new_tokens'] = self.model.config.max_seq_len - len(inputs["input_ids"][0])
+
+            # Generate sequences
+            generation_inputs = {
+                "input_ids": inputs["input_ids"],
+                "mode": self._mode,
+                **embeddings,
+                **generation_params
+            }
+
+            # Generate sequences
+            generated_sequence, raw_next_token_generation, out_seed = self.custom_generate(**generation_inputs)
+
+            # Post-processing
+            next_token_generation = self._post_process_tokens(raw_next_token_generation)
+            return self._prepare_output(generated_sequence, next_token_generation, self._mode, prompt, out_seed)
             
         except Exception as e:
             return self._handle_generation_error(e, prompt_config)
+
+        
 
 # Factory for creating appropriate handlers
 class HandlerFactory:
