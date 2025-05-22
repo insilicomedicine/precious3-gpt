@@ -12,5 +12,6 @@ from .screening import (
     AsyncEnrichrAnalysis,
     AsyncEnrichrCaller,
     RateLimitedEnrichrAnalysis,
-    analyze_gene_list
+    analyze_gene_list,
+    TopCpdScreening
 )

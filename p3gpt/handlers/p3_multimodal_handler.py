@@ -76,8 +76,8 @@ class BaseHandler(ABC):
     @abstractmethod
     def custom_generate(self, **kwargs) -> Tuple[Dict[str, List], List[List], int]:
         """Generate sequences based on input parameters"""
-        pass
-
+        pass        
+    
     def default_generate(
         self,
         input_ids: torch.Tensor,
@@ -150,9 +150,10 @@ class BaseHandler(ABC):
                 "acc_embs_down_txt_mean": acc_embs_down_txt
             }
 
-            # Get generation parameters and set max_new_tokens
+            # Get generation parameters
+            if self.generation_config.max_new_tokens is None:
+                self.generation_config.max_new_tokens = self.model.config.max_seq_len - len(input_ids[0])
             generation_params = self.generation_config.get_generation_params()
-            generation_params['max_new_tokens'] = self.model.config.max_seq_len - len(inputs["input_ids"][0])
             # generation_params['device'] = self.device
 
             # Generate sequences
@@ -271,16 +272,19 @@ class BaseHandler(ABC):
 
         return out
 
-    def process_generated_outputs(self, next_token_up_genes: List[List],
+    def process_generated_outputs(self, 
+                                  next_token_up_genes: List[List],
                                   next_token_down_genes: List[List],
+                                  next_token_compounds: List[List],
                                   mode: str) -> Dict[str, List]:
-        """Process generated outputs for UP and DOWN genes based on the mode."""
+        """Process generated outputs for UP and DOWN genes, as well as compounds based on the mode."""
         processed_outputs = {"up": [], "down": []}
 
-        if mode in ['meta2diff', 'meta2diff2compound']:
+        if mode in ['meta2diff', 'meta2diff2compound', 'diff2compound']:
             # Get unique genes for up and down regulation
             up_genes = self._get_unique_genes(next_token_up_genes)[0] if next_token_up_genes else []
             down_genes = self._get_unique_genes(next_token_down_genes)[0] if next_token_down_genes else []
+            gen_cpds = self._get_unique_cpds(next_token_compounds)[0] if next_token_compounds else []
             
             # Find genes that appear in both lists
             up_set = set(up_genes)
@@ -304,11 +308,22 @@ class BaseHandler(ABC):
                 # No duplicates found
                 processed_outputs['up'] = up_genes
                 processed_outputs['down'] = down_genes
+            processed_outputs['cpd'] = gen_cpds
+            
         else:
             processed_outputs = {"generated_sequences": []}
 
         return processed_outputs
-
+    
+    def _get_unique_cpds(self,  tokens: List[List]) -> List[List[str]]:
+        predicted_cpds = []
+        predicted_genes_tokens = [self.tokenizer.convert_ids_to_tokens(j) for j in tokens]
+        for j in predicted_genes_tokens:
+            generated_sample = [i.strip() for i in j]
+            predicted_cpds.append(
+                sorted(set(generated_sample) & set(self.unique_compounds_p3), key=generated_sample.index))
+        return predicted_cpds
+        
     def _get_unique_genes(self, tokens: List[List]) -> List[List[str]]:
         """Get unique gene symbols from generated tokens."""
         predicted_genes = []
@@ -492,7 +507,10 @@ class EndpointHandler(BaseHandler):
 
         print(f"Generation time: {(time.time() - start_time):.2f} seconds")
 
-        processed_outputs = self.process_generated_outputs(next_token_up_genes, next_token_down_genes, mode)
+        processed_outputs = self.process_generated_outputs(next_token_up_genes, 
+                                                           next_token_down_genes,
+                                                           next_token_compounds,
+                                                           mode)
         predicted_compounds = [[i.strip() for i in self.tokenizer.convert_ids_to_tokens(j)] 
                              for j in next_token_compounds]
 
@@ -596,7 +614,10 @@ class SMILESHandler(BaseHandler):
         
         # Set random seed
         torch.manual_seed(random_seed)
-
+        if max_new_tokens is None:
+                self.generation_config.max_new_tokens = self.model.config.max_seq_len - len(input_ids[0])
+                max_new_tokens = self.generation_config.max_new_tokens 
+                
         # Prepare modality embeddings
         modality_embeddings = {
             "modality0_emb": torch.unsqueeze(torch.from_numpy(acc_embs_up_kg_mean), 0).to(self.device)
@@ -682,7 +703,10 @@ class SMILESHandler(BaseHandler):
 
         print(f"Generation time: {(time.time() - start_time):.2f} seconds")
 
-        processed_outputs = self.process_generated_outputs(next_token_up_genes, next_token_down_genes, mode)
+        processed_outputs = self.process_generated_outputs(next_token_up_genes, 
+                                                           next_token_down_genes, 
+                                                           next_token_compounds,
+                                                           mode)
         predicted_compounds = [[i.strip() for i in self.tokenizer.convert_ids_to_tokens(j)] 
                              for j in next_token_compounds]
 
@@ -738,7 +762,7 @@ class SMILESHandler(BaseHandler):
                     }
 
             # Prepare inputs
-            inputs = self._prepare_inputs(prompt)
+            input_ids = self._prepare_inputs(prompt)['input_ids']
 
             # Get embeddings including SMILES
             acc_embs_up_kg, acc_embs_up_txt, acc_embs_down_kg, acc_embs_down_txt = self._get_accumulated_embeddings(
@@ -768,12 +792,13 @@ class SMILESHandler(BaseHandler):
             }
 
             # Get generation parameters
+            if self.generation_config.max_new_tokens is None:
+                self.generation_config.max_new_tokens = self.model.config.max_seq_len - len(input_ids[0])
             generation_params = self.generation_config.get_generation_params()
-            generation_params['max_new_tokens'] = self.model.config.max_seq_len - len(inputs["input_ids"][0])
-
+            
             # Generate sequences
             generation_inputs = {
-                "input_ids": inputs["input_ids"],
+                "input_ids": input_ids,
                 "mode": self._mode,
                 **embeddings,
                 **generation_params
@@ -971,7 +996,7 @@ class DynamicSMILESHandler(SMILESHandler):
                     }
 
             # Prepare inputs
-            inputs = self._prepare_inputs(prompt)
+            input_ids = self._prepare_inputs(prompt)['input_ids']
 
             # Get embeddings including SMILES
             acc_embs_up_kg, acc_embs_up_txt, acc_embs_down_kg, acc_embs_down_txt = self._get_accumulated_embeddings(
@@ -986,12 +1011,13 @@ class DynamicSMILESHandler(SMILESHandler):
             }
 
             # Get generation parameters
+            if self.generation_config.max_new_tokens is None:
+                self.generation_config.max_new_tokens = self.model.config.max_seq_len - len(input_ids[0])
             generation_params = self.generation_config.get_generation_params()
-            generation_params['max_new_tokens'] = self.model.config.max_seq_len - len(inputs["input_ids"][0])
 
             # Generate sequences
             generation_inputs = {
-                "input_ids": inputs["input_ids"],
+                "input_ids": input_ids,
                 "mode": self._mode,
                 **embeddings,
                 **generation_params

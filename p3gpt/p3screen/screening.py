@@ -182,26 +182,15 @@ class TopTokenScreening:
         # Extract the most relevant fields for display
         summary_parts = []
         
-        # Add species if present
-        if species := prompt_dict.get('species'):
-            summary_parts.append(f"{species}")
-            
-        # Add tissue if present
-        if tissue := prompt_dict.get('tissue'):
-            summary_parts.append(f"{tissue}")
-            
+        for k in ('species', 'tissue', 'drug', 'efo'):
+            if v := prompt_dict.get(k):
+                summary_parts.append(f"{k}:{v}")
+        
         # Add case-control if present
         if case := prompt_dict.get('case'):
             if control := prompt_dict.get('control'):
                 summary_parts.append(f"{control}→{case}")
-                
-        # Add drug if present
-        if drug := prompt_dict.get('drug'):
-            summary_parts.append(f"drug:{drug}")
-            
-        # Add disease if present
-        if efo := prompt_dict.get('efo'):
-            summary_parts.append(f"disease:{efo}")
+
             
         return " | ".join(summary_parts) + "\n"
 
@@ -734,6 +723,122 @@ def analyze_gene_list(glist):
     enran.analyze()
     return enran
 
+
+
+def TopCpdScreening(TopTokenScreening):
+    
+    '''
+    A variation of TopTokenScreening for generating compounds using a similar syntax
+    '''
+
+    VALID_INSTRUCTIONS = {
+        'age_group2diff2age_group': lambda p: bool(p.get('case')) and bool(p.get('control')),
+        'disease2diff2disease': lambda p: bool(p.get('efo'))
+    }
+    
+    
+    def _determine_instructions(self, params: Dict[str, str]) -> List[str]:
+        """Determine applicable instructions based on parameters."""
+        instructions = [
+            name for name, condition in self.VALID_INSTRUCTIONS.items()
+            if condition(params)
+        ]
+
+        instructions.append('compound2diff2compound')
+        
+        return instructions
+
+
+    def __post_init__(self):
+        """Set default handler parameters"""
+        self.handler.mode = "diff2compound"  # Default mode
+        self.handler.next_tokens = 100  # Default top_k value
+
+    def __call__(self, 
+                 random_seed: Optional[int] = None, 
+                 top_k: Optional[int] = None,
+                 force: bool = False) -> None:
+        """Execute screening over parameter combinations."""
+
+        if not self.parameter_options:
+            raise ValueError("No parameter grid set")
+
+        # Get generation parameters from handler's config and update if necessary
+        if random_seed is not None:
+            self.handler.generation_config.random_seed = random_seed
+        if top_k is not None:
+            self.handler.generation_config.top_k = top_k
+            self.handler.generation_config.n_next_tokens = top_k
+
+        # Calculate total number of prompts for progress tracking
+        total_prompts = 0
+        valid_prompts = []
+        for grid in self.parameter_options:
+            for values in product(*grid.values()):
+                params = dict(zip(grid.keys(), values))
+                # Silently check if any instruction would be valid for these parameters
+                try:
+                    self._validate_case_control(params)
+                    has_valid_instruction = any(
+                        condition(params) for _, condition in self.VALID_INSTRUCTIONS.items()
+                    )
+                    if has_valid_instruction and (prompt_dict := self._complete_prompt(params)):
+                        valid_prompts.append((grid, params, prompt_dict))
+                        total_prompts += 1
+                except ValueError:
+                    # Silently skip invalid prompts
+                    pass
+
+        if total_prompts == 0:
+            print("No valid prompts to process")
+            return
+
+        # Start time tracking
+        start_time = time.time()
+        processed = 0
+
+        print(f"Starting screening of {total_prompts} prompts...")
+        
+        for grid, params, prompt_dict in valid_prompts:
+            key = self.hash_input(**prompt_dict)
+            if key in self.result and not force:
+                processed += 1
+                print(f"[{processed}/{total_prompts}] ({processed/total_prompts*100:.1f}%) Skipped (already processed): {self._format_prompt_summary(prompt_dict)}")
+                continue
+            
+            # Display compact prompt summary
+            print(f"[{processed+1}/{total_prompts}] ({(processed+1)/total_prompts*100:.1f}%) Processing: {self._format_prompt_summary(prompt_dict)}", end="", flush=True)
+            
+            # Process prompt
+            prompt_start_time = time.time()
+            predictions = self.handler(prompt_dict)['output']
+            prompt_elapsed = time.time() - prompt_start_time
+                
+            # Store results
+            self.result[key] = predictions
+            
+            # Update progress
+            processed += 1
+            
+            # Print completion status with time
+            print(f" - Done in {prompt_elapsed:.2f}s - Found {len(predictions.get('compounds', []))} compounds")
+        
+        # Report total time
+        total_elapsed = time.time() - start_time
+        print(f"\nScreening completed in {total_elapsed:.2f}s ({total_elapsed/60:.2f}m)")
+        print(f"Processed {processed} prompts, generated {len(self.result)} unique results")
+
+
+    def __repr__(self) -> str:
+        n_grids = len(self.parameter_options)
+        n_results = len(self.result)
+        return f"TopCpdScreening(grids={n_grids}, results={n_results})"
+
+    def __str__(self) -> str:
+        return f"TopCpdScreening with {len(self.result)} results from {len(self.parameter_options)} grids"
+
+    
+    
 def main():
     screen = TopTokenScreening(EndpointHandler(device='cuda:0'))
     screen_grid = {
