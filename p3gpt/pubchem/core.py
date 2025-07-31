@@ -298,14 +298,17 @@ class CompoundMapper(BaseCompoundMapper):
                     data = await response.json()
                     
                     # Verify the expected structure exists in the response
+                    canononical_or_connectivity = ('CanonicalSMILES' in data['PropertyTable']['Properties'][0]) or ('ConnectivitySMILES' in data['PropertyTable']['Properties'][0])
                     if ('PropertyTable' not in data or 
                         'Properties' not in data['PropertyTable'] or 
                         not data['PropertyTable']['Properties'] or
-                        'CanonicalSMILES' not in data['PropertyTable']['Properties'][0]):
+                        not canononical_or_connectivity):
                         self.logger.warning(f"Unexpected response format from PubChem for CID {cid}")
                         return None
                     
-                    smiles = data['PropertyTable']['Properties'][0]['CanonicalSMILES']
+                    can_smiles = data['PropertyTable']['Properties'][0].get('CanonicalSMILES')
+                    con_smiles = data['PropertyTable']['Properties'][0].get('ConnectivitySMILES')
+                    smiles = can_smiles or con_smiles
                     if not smiles:
                         self.logger.warning(f"Empty SMILES returned for CID {cid}")
                         return None
@@ -432,14 +435,17 @@ class RequestsCompoundMapper(BaseCompoundMapper):
             data = json.loads(response_text)
             
             # Verify the expected structure exists in the response
+            canononical_or_connectivity = ('CanonicalSMILES' in data['PropertyTable']['Properties'][0]) or ('ConnectivitySMILES' in data['PropertyTable']['Properties'][0])
             if ('PropertyTable' not in data or 
                 'Properties' not in data['PropertyTable'] or 
                 not data['PropertyTable']['Properties'] or
-                'CanonicalSMILES' not in data['PropertyTable']['Properties'][0]):
-                logging.warning(f"Unexpected response format from PubChem for CID {cid}")
+                not canononical_or_connectivity):
+                self.logger.warning(f"Unexpected response format from PubChem for CID {cid}")
                 return None
             
-            smiles = data['PropertyTable']['Properties'][0]['CanonicalSMILES']
+            can_smiles = data['PropertyTable']['Properties'][0].get('CanonicalSMILES')
+            con_smiles = data['PropertyTable']['Properties'][0].get('ConnectivitySMILES')
+            smiles = can_smiles or con_smiles
             if not smiles:
                 logging.warning(f"Empty SMILES returned for CID {cid}")
                 return None
