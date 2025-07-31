@@ -6,7 +6,7 @@ with open("requirements.txt", "r") as f:
 
 setup(
     name="p3gpt",
-    version="0.1.2",
+    version="0.1.3",
     description="Precious3 GPT - A multimodal language model for biomedical applications",
     author="InSilicoMedicine",
     author_email="info@insilicomedicine.com",

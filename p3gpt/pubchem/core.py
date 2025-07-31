@@ -21,6 +21,8 @@ class CompoundIdentifiers:
     cids: List[str]
     chembl_id: Optional[str] = None
     cas_id: Optional[str] = None
+    smiles: Optional[str] = None
+
     synonyms: List[str] = None
 
     def __post_init__(self):
@@ -180,7 +182,6 @@ class BaseCompoundMapper(ABC):
 
 class CompoundMapper(BaseCompoundMapper):
     """Main interface for compound mapping operations"""
-
     def __init__(self,
                  request_timeout: float = 30.0,
                  max_retries: int = 3,
@@ -279,41 +280,60 @@ class CompoundMapper(BaseCompoundMapper):
                 cid = identifier if is_cid else None
                 if not is_cid:
                     # Get CIDs from PubChem
-                    cids = await self.client.get_cids_by_name(
-                        session,
-                        self.normalizer.normalize_for_pubchem(identifier)
-                    )
-                    if not cids:
-                        self.logger.warning(f"No CID found for compound {identifier}")
-                        return None
-                    cid = cids[0]
-                
+                    cache_name = self.normalizer.normalize_for_cache(identifier)
+                    pubchem_name = self.normalizer.normalize_for_pubchem(identifier)
+                    cached_cids = self.cache.get_cached_cids(cache_name)
+                    if not cached_cids:
+                        cids = await self.client.get_cids_by_name(
+                            session,
+                            pubchem_identifier=pubchem_name
+                        )
+                        if not cids:
+                            self.logger.warning(f"No CID found for compound {identifier}")
+                            return None
+                        cached_cids = [cids[0]]
+                        self.cache.cache_cids(cache_name, cached_cids)
+                    cid = cached_cids[0]
+
                 # Get SMILES for this CID
-                url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/CanonicalSMILES/JSON"
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        self.logger.warning(f"Failed to get SMILES for CID {cid}: {await response.text()}")
-                        return None
-                    
-                    data = await response.json()
-                    
-                    # Verify the expected structure exists in the response
-                    canononical_or_connectivity = ('CanonicalSMILES' in data['PropertyTable']['Properties'][0]) or ('ConnectivitySMILES' in data['PropertyTable']['Properties'][0])
-                    if ('PropertyTable' not in data or 
-                        'Properties' not in data['PropertyTable'] or 
-                        not data['PropertyTable']['Properties'] or
-                        not canononical_or_connectivity):
-                        self.logger.warning(f"Unexpected response format from PubChem for CID {cid}")
-                        return None
-                    
-                    can_smiles = data['PropertyTable']['Properties'][0].get('CanonicalSMILES')
-                    con_smiles = data['PropertyTable']['Properties'][0].get('ConnectivitySMILES')
-                    smiles = can_smiles or con_smiles
-                    if not smiles:
-                        self.logger.warning(f"Empty SMILES returned for CID {cid}")
-                        return None
-                    
-                    return smiles
+                cached_identifiers = self.cache.cid_to_identifiers.get(cid)
+                if not cached_identifiers:
+                    self.cache.cid_to_identifiers[cid] = CompoundIdentifiers(cids=[cid])
+
+                cached_smiles = self.cache.cid_to_identifiers[cid].smiles
+                if not cached_smiles:
+
+                    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/CanonicalSMILES/JSON"
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            self.logger.warning(f"Failed to get SMILES for CID {cid}: {await response.text()}")
+                            return None
+
+                        data = await response.json()
+
+                        # Verify the expected structure exists in the response
+                        canononical_or_connectivity = (('CanonicalSMILES' in data['PropertyTable']['Properties'][0]) or
+                                                      ('ConnectivitySMILES' in data['PropertyTable']['Properties'][0]))
+                        if ('PropertyTable' not in data or
+                            'Properties' not in data['PropertyTable'] or
+                            not data['PropertyTable']['Properties'] or
+                            not canononical_or_connectivity):
+                            self.logger.warning(f"Unexpected response format from PubChem for CID {cid}")
+                            return None
+
+                        can_smiles = data['PropertyTable']['Properties'][0].get('CanonicalSMILES')
+                        con_smiles = data['PropertyTable']['Properties'][0].get('ConnectivitySMILES')
+                        smiles = can_smiles or con_smiles
+                        if not smiles:
+                            self.logger.warning(f"Empty SMILES returned for CID {cid}")
+                            return None
+
+                    self.cache.cid_to_identifiers[cid].smiles = smiles
+
+                else:
+                    smiles = cached_smiles
+
+                return smiles
                     
             except Exception as e:
                 self.logger.error(f"Error getting SMILES: {e}")
@@ -328,8 +348,12 @@ class RequestsCompoundMapper(BaseCompoundMapper):
         self.api_base = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
         self.timeout = request_timeout
         self.max_retries = max_retries
+
         self.cache = CompoundCache()
+        self.normalizer = CompoundNormalizer()
+
         self.session = requests.Session()
+        self.logger = logging.getLogger(__name__)
 
     def _make_request(self, url: str) -> Optional[str]:
         for attempt in range(self.max_retries):
@@ -398,7 +422,7 @@ class RequestsCompoundMapper(BaseCompoundMapper):
                 results[name] = identifiers_list if identifiers_list else None
 
             except Exception as e:
-                logging.error(f"Error processing compound {name}: {e}")
+                self.logger.error(f"Error getting SMILES: {e}")
                 results[name] = None
 
         return results
@@ -418,40 +442,60 @@ class RequestsCompoundMapper(BaseCompoundMapper):
             cid = identifier if is_cid else None
             if not is_cid:
                 # Get CIDs from PubChem
-                cids = self.get_cids_by_name(identifier)
-                if not cids:
-                    logging.warning(f"No CID found for compound {identifier}")
-                    return None
-                cid = cids[0]
-            
+                cache_name = self.normalizer.normalize_for_cache(identifier)
+                pubchem_name = self.normalizer.normalize_for_pubchem(identifier)
+                cached_cids = self.cache.get_cached_cids(cache_name)
+                if not cached_cids:
+                    cids = self.get_cids_by_name(pubchem_name)
+                    if not cids:
+                        self.logger.warning(f"No CID found for compound {identifier}")
+                        return None
+                    cached_cids = [cids[0]]
+                    self.cache.cache_cids(cache_name, cached_cids)
+                cid = cached_cids[0]
+
             # Get SMILES for this CID
-            url = f"{self.api_base}/compound/cid/{cid}/property/CanonicalSMILES/JSON"
-            response_text = self._make_request(url)
-            
-            if not response_text:
-                logging.warning(f"Failed to get SMILES for CID {cid}")
-                return None
-            
-            data = json.loads(response_text)
-            
-            # Verify the expected structure exists in the response
-            canononical_or_connectivity = ('CanonicalSMILES' in data['PropertyTable']['Properties'][0]) or ('ConnectivitySMILES' in data['PropertyTable']['Properties'][0])
-            if ('PropertyTable' not in data or 
-                'Properties' not in data['PropertyTable'] or 
-                not data['PropertyTable']['Properties'] or
-                not canononical_or_connectivity):
-                self.logger.warning(f"Unexpected response format from PubChem for CID {cid}")
-                return None
-            
-            can_smiles = data['PropertyTable']['Properties'][0].get('CanonicalSMILES')
-            con_smiles = data['PropertyTable']['Properties'][0].get('ConnectivitySMILES')
-            smiles = can_smiles or con_smiles
-            if not smiles:
-                logging.warning(f"Empty SMILES returned for CID {cid}")
-                return None
-            
+            cached_identifiers = self.cache.cid_to_identifiers.get(cid)
+            if not cached_identifiers:
+                self.cache.cid_to_identifiers[cid] = CompoundIdentifiers(cids=[cid])
+
+            cached_smiles = self.cache.cid_to_identifiers[cid].smiles
+            if not cached_smiles:
+
+                # Get SMILES for this CID
+                url = f"{self.api_base}/compound/cid/{cid}/property/CanonicalSMILES/JSON"
+                response_text = self._make_request(url)
+
+                if not response_text:
+                    logging.warning(f"Failed to get SMILES for CID {cid}")
+                    return None
+
+                data = json.loads(response_text)
+
+                # Verify the expected structure exists in the response
+                canononical_or_connectivity = (('CanonicalSMILES' in data['PropertyTable']['Properties'][0]) or
+                                               ('ConnectivitySMILES' in data['PropertyTable']['Properties'][0]))
+                if ('PropertyTable' not in data or
+                    'Properties' not in data['PropertyTable'] or
+                    not data['PropertyTable']['Properties'] or
+                    not canononical_or_connectivity):
+                    self.logger.warning(f"Unexpected response format from PubChem for CID {cid}")
+                    return None
+
+                can_smiles = data['PropertyTable']['Properties'][0].get('CanonicalSMILES')
+                con_smiles = data['PropertyTable']['Properties'][0].get('ConnectivitySMILES')
+                smiles = can_smiles or con_smiles
+                if not smiles:
+                    self.logger.warning(f"Empty SMILES returned for CID {cid}")
+                    return None
+
+                self.cache.cid_to_identifiers[cid].smiles = smiles
+
+            else:
+                smiles = cached_smiles
+
             return smiles
-            
+
         except Exception as e:
             logging.error(f"Error getting SMILES: {e}")
             return None
